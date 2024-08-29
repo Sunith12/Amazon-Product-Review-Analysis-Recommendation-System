@@ -1,0 +1,1392 @@
+---
+title: "DPA_SENTIMENT_ANALYSIS_FOR_AMAZON_PRODUCT_REVIEWS"
+output:
+  html_document:
+    df_print: paged
+---
+
+# 1.Data Collection
+
+The dataset we'll be working with includes details on over 1000 products sold on Amazon, such as their names, categories, prices, ratings, and reviews. Our goal is to analyze this data to uncover meaningful insights that can benefit both Amazon and its customers.
+
+For Amazon, this analysis can reveal which products are popular and which aren't, allowing them to optimize pricing and marketing strategies. For customers, having access to detailed product data, including ratings and reviews, can aid in making informed purchasing decisions.
+
+We'll be exploring this dataset, conducting data analysis and visualization, and even developing a recommendation system based on the data.
+
+#### Importing Libraries:
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(naniar)
+library(tidyr)
+library(pheatmap)
+library(reshape2)
+library(stringr)
+library(ggcorrplot)
+library(wordcloud2)
+library(tm)
+library(tidytext)
+library(textdata)
+library(textstem)
+library(syuzhet)
+library(SnowballC)
+library(caret)
+library(e1071)
+library(randomForest)
+library(class)
+library(recommenderlab)
+```
+
+#### Importing the dataset:
+
+```{r}
+#Importing dataset 
+df = read.csv(file = "./amazon.csv", stringsAsFactors = FALSE)
+```
+
+#### Exploring the dataset:
+```{r}
+summary(df)
+
+#Check the column names:
+df_colnames = colnames(df)
+
+```
+```{r}
+dim(df)
+```
+
+
+```{r}
+# 1465 rows 14 columns
+# img_link and product_link are not useful for our analysis so dropping from df
+
+# Remove 'img_link' and 'product_link' columns from the dataframe
+df <- subset(df, select = -c(img_link, product_link))
+
+# Check the remaining column names
+colnames(df)
+
+```
+```{r}
+# View dataset top rows
+head(df)
+
+```
+
+```{r}
+glimpse(head(df, 5))
+```
+
+Data includes concatenated information 
+
+# 2.Data Preparation
+
+## Data Inspection: 
+
+We'll begin by examining the dataset for any missing values, duplicates, or inconsistencies. Additionally, we'll verify that the data types are accurate to ensure the dataset is ready for analysis.
+
+#### check for missing values
+
+```{r}
+# Function to check for missing values
+check_missing_values <- function(dataframe) {
+  sapply(dataframe, function(x) {
+    sum(is.na(x) | x == "" | x == "NA" | x == "NaN")
+  })
+}
+
+# Print missing values count for each column
+print(check_missing_values(df))
+```
+To ensure the accuracy of our analysis, we'll remove rows from the dataset that contain blank values for the rating_count column. This step is crucial as missing information can impact the reliability of our findings. By doing so, we'll focus on preserving data points that have all the necessary details intact.
+
+```{r}
+# Remove rows with missing values in the rating_count column
+df <- df[!is.na(df$rating_count) & df$rating_count != "" & df$rating_count != "NA" & !is.nan(df$rating_count), ]
+```
+
+```{r}
+# Create a heatmap of missing values
+gg_miss_var(df)
+```
+
+```{r}
+# Check missing values after removal
+check_missing_values <- function(dataframe) {
+  sapply(dataframe, function(x) sum(is.na(x)| x == "" | x == "NA" | x == "NaN"))
+}
+
+print(check_missing_values(df))
+
+```
+```{r}
+#### number of rows and columns after removing missing values rows
+dim(df)
+```
+
+#### check for duplicates
+```{r}
+# Identify all duplicated rows
+duplicates <- duplicated(df)
+
+# Subset the DataFrame to include only duplicated rows including multiple instances of the same duplicate.
+duplicated_rows <- df[duplicates, ]
+
+# Remove duplicate rows within the duplicated_rows subset to get unique duplicated rows
+unique_duplicated_rows <- duplicated_rows %>% distinct()
+print(unique_duplicated_rows)
+
+```
+There are 65 duplicated rows and 55 unique duplicate rows
+```{r}
+# Combine the original rows with duplicated rows
+combined_rows <- rbind(unique_duplicated_rows, df)
+
+grouped_results <- combined_rows %>%
+  group_by(across(everything())) %>%
+  arrange(across(everything()))
+
+# Print the grouped results
+print(grouped_results)
+
+```
+```{r}
+# Count the number of duplicates for each product_id
+duplicate_counts <- duplicated_rows %>%
+  group_by(product_id) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Print the counts
+print(duplicate_counts)
+
+# Plot a bar plot for the count of duplicates
+ggplot(duplicate_counts, aes(x = product_id, y = count)) +
+  geom_bar(stat = 'identity', fill = 'blue') +
+  labs(title = "Bar Plot of duplicated rows",
+       x = "Product ID",
+       y = "Count of Duplicates") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+```
+```{r}
+# Remove duplicate rows based on all columns
+df_unique <- df %>% distinct()
+
+# Print the unique DataFrame
+print(df_unique)
+
+```
+Input dataset contains 1398 unique rows after duplicates are removed
+
+#### checking data types of the columns
+
+```{r}
+sapply(df_unique, class)
+```
+#### converting price columns from character to numeric:
+
+```{r}
+# function to convert categorical to numerical values
+clean_and_convert <- function(column) {
+  cleaned_column <- gsub("[^0-9.]", "", column)  # Remove all non-numeric characters except the decimal point
+  numeric_column <- as.numeric(cleaned_column)   # Convert to numeric
+  return(numeric_column)
+}
+```
+
+```{r}
+df_unique$discounted_price <- clean_and_convert(df_unique$discounted_price)
+```
+
+```{r}
+df_unique$actual_price <- clean_and_convert(df_unique$actual_price)
+```
+
+```{r}
+convert_percent_to_numeric <- function(column) {
+  # Remove the percentage sign and convert to numeric
+  numeric_column <- as.numeric(gsub("%", "", column))
+  # Divide by 100 to get the actual numeric value
+  numeric_column <- numeric_column / 100
+  return(numeric_column)
+}
+```
+
+```{r}
+df_unique$discount_percentage <- convert_percent_to_numeric(df_unique$discount_percentage)
+```
+
+```{r}
+sapply(df_unique, class)
+```
+
+```{r}
+# Check missing values after conversion of datatypes
+check_missing_values <- function(dataframe) {
+  sapply(dataframe, function(x) sum(is.na(x)| x == "" | x == "NA" | x == "NaN"))
+}
+
+print(check_missing_values(df_unique))
+
+```
+#### fixing inconsistencies with the rating column:
+
+```{r}
+# Get the counts of unique values in the 'rating' column
+rating_counts <- table(df_unique$rating)
+
+print(rating_counts)
+```
+
+```{r}
+# Find the rows where the 'rating' column has the value '|'
+rows_with_pipe <- df_unique[df_unique$rating == "|", ]
+
+print(rows_with_pipe)
+```
+Upon visiting the Amazon page to check the rating, discovered that the product with ID B08L12N5H1 has a rating of 4. So, updating the rating value to 4 for the particular column.
+
+```{r}
+# Update the rating value to 4 for the product with ID B08L12N5H1
+df_unique[df_unique$product_id == "B08L12N5H1", "rating"] <- 4
+```
+
+```{r}
+# Checking again to confirm if the rating value has been updated.
+rows_with_pipe <- df_unique[df_unique$rating == "|", ]
+
+print(rows_with_pipe)
+```
+
+#### converting rating column from character to numeric:
+
+```{r}
+df_unique$rating <- clean_and_convert(df_unique$rating)
+df_unique$rating_count <- clean_and_convert(df_unique$rating_count)
+```
+
+```{r}
+# Check missing values after conversion of data types
+check_missing_values <- function(dataframe) {
+  sapply(dataframe, function(x) sum(is.na(x)| x == "" | x == "NA" | x == "NaN"))
+}
+
+print(check_missing_values(df_unique))
+
+```
+
+#### create new df with cleaned columns for analysis.
+
+```{r}
+cleaned_df <- df_unique[, c("product_id", "product_name", "category", "discounted_price", "actual_price", "discount_percentage", "rating", "rating_count", "about_product", "user_id", "user_name", "review_id", "review_title", "review_content")]
+```
+
+```{r}
+sapply(cleaned_df, class)
+```
+
+```{r}
+print(head(cleaned_df))
+```
+
+#### splitting the category column to main and sub-categories.
+
+```{r}
+# Split the 'category' column based on the delimiter '|'
+category_split <- strsplit(cleaned_df$category, "\\|")
+
+# Extract the main category (first element) and sub category (last element)
+cleaned_df$main_category <- sapply(category_split, function(x) x[1])
+cleaned_df$sub_category <- sapply(category_split, function(x) x[2])
+
+print(cleaned_df)
+```
+
+#### splitting the review id,review title, review content and userid columns by the delimiter.
+
+```{r}
+df_review_id_separated <- cleaned_df %>%
+  separate(review_id, 
+           into = paste0("review_id_", 1:8), 
+           sep = ",", 
+           extra = "drop", 
+           fill = "right")
+```
+
+```{r}
+print(df_review_id_separated)
+```
+
+```{r}
+df_title_separated <- cleaned_df %>%
+  separate(review_title, 
+           into = paste0("review_title_", 1:8), 
+           sep = ",", 
+           extra = "drop", 
+           fill = "right")
+```
+
+```{r}
+print(df_title_separated)
+```
+
+```{r}
+df_content_separated <- cleaned_df %>%
+  separate(review_content, 
+           into = paste0("review_content_", 1:8), 
+           sep = ",", 
+           extra = "drop", 
+           fill = "right")
+```
+
+```{r}
+print(df_content_separated)
+```
+
+```{r}
+
+df_id_separated <- cleaned_df %>%
+  separate(user_id, 
+           into = paste0("user_id_", 1:8), 
+           sep = ",", 
+           extra = "drop", 
+           fill = "right")
+```
+
+```{r}
+print(df_id_separated)
+```
+
+
+#### adding the split columns back to the original dataframe for further analysis.
+
+```{r}
+# Using base R
+cleaned_df <- cbind(cleaned_df, df_review_id_separated[, c("review_id_1", "review_id_2", "review_id_3", "review_id_4", "review_id_5", "review_id_6", "review_id_7", "review_id_8")])
+```
+
+
+```{r}
+# Using base R
+cleaned_df <- cbind(cleaned_df, df_title_separated[, c("review_title_1", "review_title_2", "review_title_3", "review_title_4", "review_title_5", "review_title_6", "review_title_7", "review_title_8")])
+```
+
+```{r}
+# Using base R
+cleaned_df <- cbind(cleaned_df, df_content_separated[, c("review_content_1", "review_content_2", "review_content_3", "review_content_4", "review_content_5", "review_content_6", "review_content_7","review_content_8")])
+```
+
+```{r}
+# Using base R
+cleaned_df <- cbind(cleaned_df, df_id_separated[, c("user_id_1", "user_id_2", "user_id_3", "user_id_4", "user_id_5", "user_id_6", "user_id_7","user_id_8")])
+```
+
+
+#### the final df with the cleaned columns and values.
+
+```{r}
+print(cleaned_df)
+```
+
+```{r}
+# Create rating_score column based on rating values
+cleaned_df <- cleaned_df %>%
+  mutate(rating_score_values = case_when(
+    rating < 2.0 ~ "Bad",
+    rating < 3.0 ~ "Below Average",
+    rating < 4.0 ~ "Average",
+    rating < 5.0 ~ "Above Average",
+    rating == 5.0 ~ "Very good"
+  ))
+
+print(cleaned_df)
+```
+
+```{r}
+sapply(cleaned_df, class)
+```
+
+# Exploratory Data Analysis (EDA) 
+
+### Statistical summary of numerical columns : actual_price, discount_price, discount_percentage, rating, rating_count
+
+```{r}
+numerical_summary <- sapply(cleaned_df[, sapply(cleaned_df, is.numeric)], summary)
+print(numerical_summary)
+```
+Pricing Trends:wide range of product prices, with a significant average discounted price higher than the median.
+Discount Strategies: Discounts are generally substantial, with a mean discount of 47% and up to 94% in some cases, indicating aggressive pricing strategies.
+Ratings: Products tend to have high average ratings, suggesting general customer satisfaction.
+
+```{r}
+# Melt data for plotting
+input_df_long <- cleaned_df %>%
+  pivot_longer(cols = c(discounted_price, actual_price), names_to = "Type", values_to = "Price")
+
+ggplot(input_df_long, aes(x = Type, y = Price)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(title = "Boxplot of Pricing", x = "Price Type", y = "Price") +
+  theme_minimal()
+```
+```{r}
+# Extract summary statistics for 'discounted_price'
+discounted_price_summary <- numerical_summary[,"discounted_price"]
+# print(discounted_price_summary)
+
+# Convert to data frame for plotting
+discounted_price_df <- data.frame(
+  Statistic = names(discounted_price_summary),
+  Value = as.numeric(discounted_price_summary)
+)
+
+# Plotting
+ggplot(discounted_price_df, aes(x = Statistic, y = Value)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  scale_y_continuous(labels = scales::label_number(scale_cut = scales::cut_short_scale())) +
+  labs(
+    title = "Summary Statistics of Discounted Prices",
+    x = "Statistic parameters",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+```
+# Plot for rating
+```{r}
+# Density plot for rating
+plot(density(cleaned_df$rating, na.rm = TRUE),
+     main = "Density Plot of Ratings",
+     xlab = "Rating",
+     ylab = "Density",
+     col = "purple")
+
+```
+
+### Product Categories
+```{r}
+# Get the counts of unique values in the 'category' column
+category_counts <- table(cleaned_df$main_category)
+
+print(category_counts)
+```
+```{r}
+# Pie chart for main_category
+ggplot(cleaned_df, aes(x = "", fill = main_category)) +
+  geom_bar(width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Pie Chart of Product Main Categories")
+```
+
+```{r}
+# Get the counts of unique values in the 'subcategory' column
+sub_category_counts <- table(cleaned_df$sub_category)
+
+print(sub_category_counts)
+```
+
+```{r}
+# Convert the table to a matrix
+sub_category_matrix <- matrix(sub_category_counts, nrow = 1, dimnames = list("Counts", names(sub_category_counts)))
+
+# Convert the table to a data frame
+sub_category_df <- as.data.frame(sub_category_counts)
+
+# Rename columns for easier ggplot usage
+colnames(sub_category_df) <- c("Sub_Category", "Count")
+
+# Melt the data for ggplot2
+sub_category_melted <- melt(sub_category_df, id.vars = "Sub_Category")
+
+# Create the heatmap with ggplot2
+ggplot(sub_category_melted, aes(x = Sub_Category, y = variable, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +
+  theme_minimal() +
+  labs(x = "Sub-Category", y = "Counts", fill = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### **Plotting Distribution of top products by category**
+
+```{r}
+# Count the number of products per category and select the top categories
+category_counts <- cleaned_df %>%
+  group_by(main_category) %>%
+  summarise(product_count = n()) %>%
+  arrange(desc(product_count))
+
+```
+
+```{r}
+# Plot the distribution of products by category
+ggplot(category_counts, aes(x = reorder(main_category, -product_count), y = product_count,fill = main_category)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = product_count), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Distribution of Products by Category",
+       x = "Category",
+       y = "Number of Products") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### **Plotting Distribution of top products by sub-category**
+
+```{r}
+# Count the number of products per category and select the top 30 categories
+category_counts <- cleaned_df %>%
+  group_by(sub_category) %>%
+  summarise(product_count = n()) %>%
+  arrange(desc(product_count))
+```
+
+```{r}
+# Plot the distribution of products by category
+ggplot(category_counts, aes(x = reorder(sub_category, -product_count), y = product_count)) +
+  geom_bar(stat = "identity", color = "blue") +
+  geom_text(aes(label = product_count), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Distribution of Products by SubCategory",
+       x = "SubCategory",
+       y = "Number of Products") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### **Plotting Distribution of top 5 expensive products after discount**
+
+```{r}
+top5_expensive <- cleaned_df %>%
+  arrange(desc(discounted_price)) %>%
+  head(5)
+```
+
+```{r}
+# Extract the first two words of the product name
+top5_expensive$product_name <- sapply(top5_expensive$product_name, function(name) {
+  words <- str_split(name, " ")[[1]]
+  paste(words[1:min(2, length(words))], collapse = " ")
+})
+
+ggplot(top5_expensive, aes(x = reorder(product_name, discounted_price), y = discounted_price, fill = product_name)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = round(discounted_price, 2)), vjust = -0.5, size = 3.5) +
+  labs(title = "Top 5 Most Expensive Products After Discount",
+       x = "Product Name",
+       y = "Discounted Price (INR)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none", # Remove legend
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_fill_brewer(palette = "Set3")
+
+```
+
+### **Plotting Distribution of 5 cheapest products after discount**
+
+```{r}
+cheapest5 <- cleaned_df %>%
+  arrange(discounted_price) %>%
+  head(5)
+```
+
+```{r}
+
+# Extract the first two words of the product name
+cheapest5$product_name <- sapply(cheapest5$product_name, function(name) {
+  words <- str_split(name, " ")[[1]]
+  paste(words[1:min(2, length(words))], collapse = " ")
+})
+
+# Create the bar plot
+ggplot(cheapest5, aes(x = reorder(product_name, discounted_price), y = discounted_price, fill = product_name)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = round(discounted_price, 2)), vjust = -0.5, size = 3.5) +
+  labs(title = "Top 5 Cheapest Products After Discount",
+       x = "Product Name",
+       y = "Discounted Price (Rupee India)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none", # Remove legend
+    axis.text.x = element_text(angle = 45, hjust = 1) # Rotate x-axis labels if needed
+  ) +
+  scale_fill_brewer(palette = "Set3")
+
+```
+
+### Correlation between features
+
+```{r}
+# Calculate correlation matrix
+numeric_df <- cleaned_df %>% select_if(is.numeric)
+cor_matrix <- round(cor(numeric_df), 2)
+
+print(cor_matrix)
+
+# Create the heatmap using ggcorrplot
+heatmap_plot <- ggcorrplot(cor_matrix, lab = TRUE, title = "Heatmap of Correlation Between Features")
+heatmap_plot
+
+```
+
+The dataset shows minimal correlations among its features. The only notable correlation observed is a positive relationship between the actual prices and discounted prices of products.
+
+```{r}
+# Create scatter plot
+scatter_plot <- ggplot(cleaned_df, aes(x = actual_price, y = discounted_price)) +
+  geom_point(color = 'blue') +  # Customize point color
+  labs(title = "Scatter Plot of Actual Price vs Discounted Price",
+       x = "Actual Price (Rupee India)",
+       y = "Discounted Price (Rupee India)") +
+  theme_minimal() +  # Use minimal theme
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold")) +
+  scale_x_continuous(breaks = c(0, 20000, 40000, 60000, 80000),
+                     labels = c("0", "20000", "40000", "60000", "80000")) +
+  scale_y_continuous(labels = scales::number_format())   # Format y-axis labels
+
+# Print scatter plot
+print(scatter_plot)
+```
+### **Plotting Distribution of discount percentage range by main category**
+
+```{r}
+# Plot the discount percentage range by product main category
+ggplot(cleaned_df, aes(x = main_category, y = discount_percentage, fill = main_category)) +
+  geom_boxplot() +
+  labs(title = "Discount Percentage Range by Product Main Category",
+       x = "Product Main Category",
+       y = "Discount Percentage") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold")) +
+  coord_flip()
+
+```
+
+Computers & Accessories, Electronics, and Home & Kitchen items exhibit a wide range of discounts, from 0% up to over 90%. On the other hand, Toys & Games, Cars & Motorbikes, Health & Personal Care, and Home Improvement products have the narrowest range of discount variations.
+
+
+### **Plotting Distribution of discount percentage range by sub-category**
+
+```{r}
+# Plot the discount percentage range by product sub-category
+ggplot(cleaned_df, aes(x = discount_percentage, y = sub_category, fill = sub_category)) +
+  geom_boxplot() +
+  labs(title = "Discount Range by Product Sub-Category",
+       x = "Discount Percentage",
+       y = "Product Sub-Category") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"),
+        legend.position = "none")
+```
+
+
+### **Plotting Distribution of rating of the top products category**
+
+```{r}
+ggplot(cleaned_df, aes(x = rating, y = main_category, fill = main_category)) +
+  geom_boxplot() +
+  labs(title = "Rating Distribution by Product Main Category",
+       x = "Rating",
+       y = "Product Main Category") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none" # Remove legend
+  ) +
+  scale_fill_brewer(palette = "Set3")
+```
+
+### **Plotting Distribution of rating of the top subproducts category**
+
+```{r}
+ggplot(cleaned_df, aes(x = rating, y = sub_category, fill = sub_category)) +
+  geom_boxplot() +
+  labs(title = "Rating Distribution by Product sub Category",
+       x = "Rating",
+       y = "Product sub Category") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "none" # Remove legend
+  ) 
+```
+
+### **Plotting Distribution of rating of all the products by percentage**
+
+```{r}
+# Calculate the rating count percentages
+rating_count <- cleaned_df %>%
+  count(rating_score_values) %>%
+  mutate(counts = round(n / sum(n), 3))
+
+# Define the order of ratings
+rating_ordered <- c('Bad','Below Average', 'Average', 'Above Average', 'Very good')
+
+# Plot the rating count percentages
+rating_count_plot <- ggplot(rating_count, aes(x = factor(rating_score_values, levels = rating_ordered), y = counts, fill = rating_score_values)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = scales::percent(counts)), vjust = -0.5, size = 3) +
+  labs(title = "The Rating of All Products in Percentage",
+       x = "Rating Category",
+       y = "Percentage") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"),
+        legend.position = "none")
+
+print(rating_count_plot)
+```
+#### Generating wordclouds
+
+This code creates a word cloud from the reviews in the dataset. The word cloud visually represents the most common words used in the reviews, with larger words indicating higher frequency. This visualization helps in understanding customer sentiment, frequently mentioned product features, issues, and other valuable insights for improving products and services. 
+
+
+```{r}
+# Remove NA values and empty strings
+reviews_text <- cleaned_df$review_content[!is.na(df$review_content) & df$review_content != ""]
+
+# Combine all reviews into a single string
+all_text <- paste(reviews_text, collapse = " ")
+
+# Create a corpus
+corpus <- Corpus(VectorSource(all_text))
+
+# Clean the text
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Convert corpus to text
+clean_text <- sapply(corpus, as.character)
+
+# Split the text into words
+words <- unlist(strsplit(clean_text, "\\s+"))
+
+# Count word frequencies
+word_freq <- table(words)
+
+# Convert to a data frame
+word_freq_df <- data.frame(word = names(word_freq), freq = as.numeric(word_freq))
+
+# Sort by frequency
+word_freq_df <- word_freq_df %>% arrange(desc(freq))
+
+# Take top 200 words
+top_words <- head(word_freq_df, 200)
+
+# Generate the word cloud
+wordcloud2(top_words, size = 2.5, color = "random-dark", backgroundColor = "white")
+```
+### **Plotting wordcloud Distribution of products with rating above average**
+
+```{r}
+high_rated_reviews <- cleaned_df %>% 
+  filter(rating > 3) %>% 
+  pull(review_content)
+
+high_rated_reviews <- high_rated_reviews[!is.na(high_rated_reviews) & high_rated_reviews != ""]
+
+# Combine all reviews into a single string
+all_text <- paste(high_rated_reviews, collapse = " ")
+
+# Create a corpus
+corpus <- Corpus(VectorSource(all_text))
+
+# Clean the text
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Convert corpus to text
+clean_text <- sapply(corpus, as.character)
+
+# Split the text into words
+words <- unlist(strsplit(clean_text, "\\s+"))
+
+# Count word frequencies
+word_freq <- table(words)
+
+# Convert to a data frame
+word_freq_df <- data.frame(word = names(word_freq), freq = as.numeric(word_freq))
+
+# Sort by frequency
+word_freq_df <- word_freq_df %>% arrange(desc(freq))
+
+# Take top 200 words
+top_words <- head(word_freq_df, 200)
+
+# Generate the word cloud
+wordcloud2(top_words, size = 2.5, color = "random-dark", backgroundColor = "white")
+```
+
+### **Plotting wordcloud Distribution of products with rating below average**
+
+```{r}
+low_rated_reviews <- cleaned_df %>% 
+  filter(rating < 3) %>% 
+  pull(review_content)
+
+low_rated_reviews <- low_rated_reviews[!is.na(low_rated_reviews) & low_rated_reviews != ""]
+
+# Combine all reviews into a single string
+all_text <- paste(low_rated_reviews, collapse = " ")
+
+# Create a corpus
+corpus <- Corpus(VectorSource(all_text))
+
+# Clean the text
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Convert corpus to text
+clean_text <- sapply(corpus, as.character)
+
+# Split the text into words
+words <- unlist(strsplit(clean_text, "\\s+"))
+
+# Count word frequencies
+word_freq <- table(words)
+
+# Convert to a data frame
+word_freq_df <- data.frame(word = names(word_freq), freq = as.numeric(word_freq))
+
+# Sort by frequency
+word_freq_df <- word_freq_df %>% arrange(desc(freq))
+
+# Take top 200 words
+top_words <- head(word_freq_df, 200)
+
+# Generate the word cloud
+wordcloud2(top_words, size = 2.5, color = "random-dark", backgroundColor = "white")
+```
+
+#### Generating word freqency analyise sentiments
+
+```{r}
+# Custom dictionary for normalization (add more terms as needed)
+custom_dict <- c("issues" = "issue", 
+                 "problems" = "problem", 
+                 "complaints" = "complain", 
+                 "complaint" = "complain",
+                 "noises" = "noise",
+                 "badly" = "bad")
+
+# Function to apply custom normalization
+normalize_words <- function(word, dict) {
+  if (word %in% names(dict)) {
+    return(dict[[word]])
+  } else {
+    return(word)
+  }
+}
+
+# Tokenize the text data
+reviews_tokens <- cleaned_df %>%
+  unnest_tokens(word, review_content)
+
+# Apply custom normalization
+reviews_tokens <- reviews_tokens %>%
+  mutate(word = sapply(word, normalize_words, dict = custom_dict))
+
+# Apply lemmatization
+reviews_tokens <- reviews_tokens %>%
+  mutate(word = lemmatize_words(word))
+
+# Load Bing sentiment lexicon
+bing_sentiments <- get_sentiments("bing")
+
+# Join the tokenized words with the Bing sentiment lexicon
+sentiment_words <- reviews_tokens %>%
+  inner_join(bing_sentiments, by = "word")
+
+# Inspect the resulting data frame
+head(sentiment_words)
+
+# Count the occurrences of positive and negative words
+word_frequencies <- sentiment_words %>%
+  count(word, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n = 0)) %>%
+  mutate(total = positive + negative) %>%
+  arrange(desc(total))
+
+print(word_frequencies)
+
+```
+
+```{r}
+# Arrange data for top 20 positive and negative words
+top_positive <- word_frequencies %>%
+  arrange(desc(positive)) %>%
+  head(20) %>%
+  mutate(word = factor(word, levels = rev(word)))
+
+top_negative <- word_frequencies %>%
+  arrange(desc(negative)) %>%
+  head(20) %>%
+  mutate(word = factor(word, levels = rev(word)))
+
+# Plot Top 20 Positive Words
+ggplot(top_positive, aes(x = word, y = positive)) +
+  geom_bar(stat = 'identity', fill = 'green') +
+  coord_flip() +
+  labs(title = 'Top 20 Positive Words', x = 'Word', y = 'Positive Score') +
+  theme_minimal()
+
+# Plot Top 20 Negative Words
+ggplot(top_negative, aes(x = word, y = negative)) +
+  geom_bar(stat = 'identity', fill = 'red') +
+  coord_flip() +
+  labs(title = 'Top 20 Negative Words', x = 'Word', y = 'Negative Score') +
+  theme_minimal()
+```
+
+```{r}
+cleaned_df$rating_weighted <- cleaned_df$rating * cleaned_df$rating_count
+# Select numeric columns
+numeric_cols <- cleaned_df[sapply(cleaned_df, is.numeric)]
+numeric_cols <- numeric_cols[ , !(names(numeric_cols) %in% "sentiment_score")]
+# Calculate the correlation matrix
+correlation_matrix <- cor(numeric_cols, use = "complete.obs")
+
+print(correlation_matrix)
+```
+
+```{r}
+# Plot the correlation matrix
+ggcorrplot(correlation_matrix, 
+           lab = TRUE, 
+           lab_size = 3, 
+           colors = c("blue", "white", "red"), 
+           title = "Correlation Matrix", 
+           ggtheme = ggplot2::theme_minimal())
+```
+# There is a slight positive correlation between the overall rating and both the rating count and the weighted rating. This implies that products with higher ratings often receive more reviews and have higher weighted ratings.
+
+# A moderate positive correlation (0.12) exists between the "rating" and "discounted_price" variables, suggesting that products priced lower through discounts tend to receive higher ratings from customers.
+
+############################################################################################
+
+#### SENTIMENT ANALYSIS
+
+Final goal is to perform sentiment analysis to gain insights of ratings, reviews over products , categories and build a predicting model. 
+
+After EDA, we need preprocess dataset for sentiment analysis
+
+```{r}
+
+preprocess_text <- function(text) {
+  text <- tolower(text)                          # Convert to lower case
+  text <- removePunctuation(text)                # Remove punctuation
+  text <- removeNumbers(text)                    # Remove numbers
+  text <- removeWords(text, stopwords("en"))     # Remove stop words
+  text <- lemmatize_strings(text)                # Lemmatize words
+  text <- stripWhitespace(text)                  # Remove extra whitespace
+  return(text)
+}
+```
+
+
+```{r}
+
+get_sentiment_score <- function(review) {
+  score <- get_sentiment(review, method = "syuzhet")
+  return(mean(score))
+}
+
+```
+
+
+```{r}
+
+# Apply text preprocessing
+cleaned_df$cleaned_reviews <- sapply(cleaned_df$review_content, preprocess_text)
+
+# Generate sentiment scores
+cleaned_df$sentiment_score <- sapply(cleaned_df$cleaned_reviews, get_sentiment_score)
+
+# Convert scores to labels
+score_to_label <- function(score) {
+  if (score > 0) {
+    return("positive")
+  } else if (score < 0) {
+    return("negative")
+  } else {
+    return("neutral")
+  }
+}
+
+```
+
+```{r}
+cleaned_df$sentiment <- sapply(cleaned_df$sentiment_score, score_to_label)
+
+print(cleaned_df)
+```
+
+```{r}
+
+# Create a corpus
+corp <- Corpus(VectorSource(cleaned_df$cleaned_reviews))
+
+# Create Document-Term Matrix with TF-IDF
+dtm <- DocumentTermMatrix(corp, control = list(weighting = weightTfIdf))
+
+# Convert to data frame
+df_tfidf <- as.data.frame(as.matrix(dtm))
+```
+
+```{r}
+# Convert sentiment to factor
+cleaned_df$sentiment <- factor(cleaned_df$sentiment)
+
+# Split data into training and testing
+set.seed(123)
+trainIndex <- createDataPartition(cleaned_df$sentiment, p = .8, list = FALSE, times = 1)
+trainData <- df_tfidf[trainIndex,]
+testData <- df_tfidf[-trainIndex,]
+trainLabels <- cleaned_df$sentiment[trainIndex]
+testLabels <- cleaned_df$sentiment[-trainIndex]
+```
+
+#### svm
+
+```{r}
+# Define a sequence of cost values to try
+cost_values <- c(0.1, 1, 10, 100)
+
+# Initialize a list to store the results
+results <- list()
+
+# Loop over the cost values
+for (cost in cost_values) {
+  # Train the SVM model
+  model <- svm(trainData, trainLabels, kernel = "linear", cost = cost, scale = FALSE)
+  
+  # Make predictions
+  predictions <- predict(model, testData)
+  
+  # Create a confusion matrix and store the result
+  cm <- confusionMatrix(predictions, testLabels)
+  print(cm)
+  accuracy <- cm$overall["Accuracy"]
+  
+  # Store the results
+  results <- rbind(results, data.frame(Cost = cost, Accuracy = accuracy))
+}
+
+# Print the results
+print(results)
+
+# Plot the results
+ggplot(results, aes(x = Cost, y = Accuracy)) +
+  geom_point() +
+  geom_line() +
+  scale_x_log10() +  # Log scale for better visualization if cost values vary widely
+  labs(title = "SVM Performance for Different Cost Values",
+       x = "Cost Value (log scale)",
+       y = "Accuracy") +
+  theme_minimal()
+```
+
+#### random forest without train control
+
+```{r}
+library(randomForest)
+# Define a sequence of mtry values to try
+mtry_values <- c(2, 4, 8, 12, 16, 20)
+
+# Initialize a dataframe to store the results
+results <- data.frame(mtry = numeric(), Accuracy = numeric(), Precision = numeric(), Recall = numeric())
+
+# Loop over the mtry values
+for (m in mtry_values) {
+  # Train the Random Forest model
+  rf_model <- randomForest(x = trainData, y = trainLabels, ntree = 100, mtry = m, importance = TRUE)
+  
+  # Predict on test data
+  rf_predictions <- predict(rf_model, testData)
+  
+  # Evaluate the model
+  rf_confusionMatrix <- confusionMatrix(rf_predictions, testLabels)
+  print(rf_confusionMatrix)
+  
+  # Calculate performance metrics
+  accuracy <- rf_confusionMatrix$overall["Accuracy"]
+  
+  # Store the results
+  results <- rbind(results, data.frame(mtry = m, Accuracy = accuracy))
+}
+
+# Print the results
+print(results)
+
+# Plot the results
+ggplot(results, aes(x = mtry, y = Accuracy)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "Random Forest Accuracy for Different mtry Values",
+       x = "mtry Value",
+       y = "Accuracy") +
+  theme_minimal()
+```
+
+#### KNN
+
+```{r}
+
+library(class)
+# Define a sequence of k values to try
+k_values <- c(5, 20, 120)
+
+# Initialize a dataframe to store the results
+results <- data.frame(k = numeric(), Accuracy = numeric())
+
+# Loop over the k values
+for (k in k_values) {
+  # Train the k-NN model
+  knn_predictions <- knn(trainData, testData, trainLabels, k = k)
+  
+  # Evaluate the model
+  knn_confusionMatrix <- confusionMatrix(knn_predictions, testLabels)
+  print(knn_confusionMatrix)
+  
+  # Calculate performance metrics
+  accuracy <- knn_confusionMatrix$overall["Accuracy"]
+  
+  # Store the results
+  results <- rbind(results, data.frame(k = k, Accuracy = accuracy))
+}
+
+# Print the results
+print(results)
+
+# Plot the results
+library(ggplot2)
+ggplot(results, aes(x = k, y = Accuracy)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "k-NN Accuracy for Different k Values",
+       x = "k Value",
+       y = "Accuracy") +
+  theme_minimal()
+```
+
+#### The highest accuracy is for SVM with accuracy 97.84.
+
+
+#### random forest with train control
+
+```{r}
+train_control <- trainControl(method = "repeatedcv",
+                              number = 10,
+                              repeats = 3,
+                              savePredictions = TRUE,
+                              classProbs = TRUE)
+```
+
+#### Predictive Modeling
+
+#### Predicting rating
+
+```{r}
+# Select relevant columns and create a subset for modeling
+pred_model_data <- cleaned_df %>%
+  select(discounted_price, actual_price, rating_count, rating)
+
+# Ensure numerical columns are treated as numeric
+pred_model_data$discounted_price <- as.numeric(as.character(pred_model_data$discounted_price))
+pred_model_data$actual_price <- as.numeric(as.character(pred_model_data$actual_price))
+pred_model_data$rating <- as.numeric(as.character(pred_model_data$rating))
+pred_model_data$rating_count <- as.numeric(as.character(pred_model_data$rating_count))
+```
+
+
+```{r}
+# Split data into training and test sets
+set.seed(123)
+trainIndex <- createDataPartition(pred_model_data$rating, p = 0.7, list = FALSE)
+trainData <- pred_model_data[trainIndex, ]
+testData <- pred_model_data[-trainIndex, ]
+
+```
+
+```{r}
+# Train Random Forest model
+rf_model <- randomForest(rating ~ ., data = trainData, importance = TRUE)
+```
+
+```{r}
+# Predict on test set
+rf_predictions <- predict(rf_model, newdata = testData)
+```
+
+```{r}
+# Evaluate model performance
+rf_rmse <- RMSE(rf_predictions, testData$rating)
+print(paste("RMSE (Random Forest):", rf_rmse))
+```
+
+```{r}
+
+# View feature importance
+importance(rf_model)
+```
+
+#### predicting discount percentage using Random Forest Regression
+
+```{r}
+
+# Select relevant columns and create a subset for modeling
+discount_data <- cleaned_df %>%
+  select(discount_percentage, actual_price, category)
+
+# Ensure numerical columns are treated as numeric
+discount_data$actual_price <- as.numeric(as.character(discount_data$actual_price))
+discount_data$discount_percentage <- as.numeric(as.character(discount_data$discount_percentage))
+
+# Convert 'category' to factor if categorical
+discount_data$category <- as.factor(discount_data$category)
+
+# Split data into training and test sets
+set.seed(123)
+trainIndex <- createDataPartition(discount_data$discount_percentage, p = 0.7, list = FALSE)
+trainData <- discount_data[trainIndex, ]
+testData <- discount_data[-trainIndex, ]
+
+# Train Random Forest model
+rf_discount_model <- train(discount_percentage ~ ., data = trainData, method = "rf")
+
+# Predict on test set
+discount_predictions <- predict(rf_discount_model, newdata = testData)
+
+# Evaluate model performance
+rmse_discount <- RMSE(discount_predictions, testData$discount_percentage)
+print(paste("RMSE for Discount Percentage:", rmse_discount))
+```
+
+#### Recommendation Systems: Develop a model to recommend products to users based on their past reviews and ratings.
+
+```{r}
+# Combining all cleaned user_id columns into one using single column
+cleaned_df_long <- cleaned_df %>%
+  pivot_longer(cols = starts_with("user_id_"), names_to = "user_id_type", values_to = "user_id_con") %>%
+  filter(!is.na(user_id_con))  # Removing any rows where user_id is NA
+```
+
+```{r}
+str(cleaned_df_long)
+```
+
+```{r}
+print(cleaned_df_long)
+```
+
+
+Finding each user rating count of products in descending order.
+```{r}
+value_counts <- cleaned_df_long %>%
+  count(user_id_con) %>%
+  arrange(desc(n))
+
+# Print the results
+print(value_counts)
+```
+
+
+```{r}
+get_product_details <- function(product_ids, product_info_df) {
+  product_info_df %>%
+    filter(product_id %in% product_ids) %>%
+    select(product_id, product_name, category)
+}
+
+# Converting the dataframe to a matrix format suitable for recommenderlab
+rating_matrix1 <- dcast(cleaned_df_long, user_id_con ~ product_id, value.var = "rating", fun.aggregate = mean)
+rownames(rating_matrix1) <- rating_matrix1$user_id_con
+rating_matrix1$user_id_con <- NULL
+
+# Converting to realRatingMatrix
+rating_matrix1 <- as(as.matrix(rating_matrix1), "realRatingMatrix")
+
+set.seed(123)
+split <- sample(x = c(TRUE, FALSE), size = nrow(rating_matrix1), replace = TRUE, prob = c(0.8, 0.2))
+trainData <- rating_matrix1[split, ]
+testData <- rating_matrix1[!split, ]
+
+# Training a user-based collaborative filtering model
+ubcf_model <- Recommender(trainData, method = "UBCF")
+
+# Making predictions for a specific user
+id_search <- "AE55KTFVNXYFD5FPYWP2OUPEYNPQ"
+
+# Finding the index of the user in the trainingData based on the user_id column
+user_index <- which(rownames(trainData) == id_search)
+if (length(user_index) > 0) {
+  # Checking if the user has rated any items
+  user_ratings <- trainData[user_index, ]
+  if (length(user_ratings@data) > 0) {
+    cat("User Ratings:\n")
+
+    # Extracting the rated items and their ratings
+    rated_items <- as(user_ratings, "list")[[1]]
+    for (item in names(rated_items)) {
+      cat("Product ID:", item, "Rating:", rated_items[[item]], "\n")
+    }
+    # Making predictions for the specified user
+    predictions <- predict(ubcf_model, user_ratings, n = 100) # Recommend top 100 products
+   # Checking if there are recommendations
+    if (length(predictions@items) > 0) {
+      # Viewing recommendations
+      recommended_items <- as(predictions, "list")
+      recommended_items_info <- get_product_details(recommended_items, cleaned_df_long)
+      cat("Recommendations:\n")
+      for (i in 1:length(recommended_items)) {
+        # cat("Product ID:", recommended_items[[i]], "\n")
+        cat("Product ID:", recommended_items[[i]], "\n",
+            "Name:", recommended_items_info$product_name[i], "\n",
+            "Category:", recommended_items_info$category[i], "\n")
+      }
+    } else {
+      print("No recommendations found.")
+    }
+  } else {
+    print("The user has not rated any items.")
+  }
+} else {
+  print("User ID not found in the training data.")
+}
+```
+
+
+
+
+
+
